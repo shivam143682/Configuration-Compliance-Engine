@@ -1,0 +1,50 @@
+{
+  "device": "HQ-Router1",
+  "policy": "Enterprise Router Policy",
+  "generated_at": "2026-07-25T05:11:01.927001+00:00",
+  "overall_status": "PASS",
+  "summary": {
+    "total": 6,
+    "pass": 6,
+    "fail": 0,
+    "error": 0
+  },
+  "results": [
+    {
+      "rule": "SSH Enabled",
+      "status": "PASS",
+      "severity": "HIGH",
+      "evidence": "Found 'ip ssh version 2' in configuration."
+    },
+    {
+      "rule": "Telnet Disabled",
+      "status": "PASS",
+      "severity": "CRITICAL",
+      "evidence": "'transport input telnet' correctly absent from configuration."
+    },
+    {
+      "rule": "NTP Configured",
+      "status": "PASS",
+      "severity": "HIGH",
+      "evidence": "Found 'ntp server' in configuration."
+    },
+    {
+      "rule": "Logging Enabled",
+      "status": "PASS",
+      "severity": "MEDIUM",
+      "evidence": "Found 'logging host' in configuration."
+    },
+    {
+      "rule": "AAA Enabled",
+      "status": "PASS",
+      "severity": "HIGH",
+      "evidence": "Found 'aaa new-model' in configuration."
+    },
+    {
+      "rule": "SNMP Configured",
+      "status": "PASS",
+      "severity": "MEDIUM",
+      "evidence": "Found 'snmp-server' in configuration."
+    }
+  ]
+}
