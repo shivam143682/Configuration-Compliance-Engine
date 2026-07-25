@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Hostname Configured",
+    "description": "Device must have a hostname configured",
+    "type": "regex",
+    "value": "^hostname\\s+\\S+",
+    "severity": "LOW"
+  },
+  {
+    "name": "SSH Enabled",
+    "description": "Device should use SSH Version 2",
+    "type": "contains",
+    "value": "ip ssh version 2",
+    "severity": "HIGH"
+  },
+  {
+    "name": "Telnet Disabled",
+    "description": "Telnet must not be permitted as a transport input on VTY lines",
+    "type": "not_contains",
+    "value": "transport input telnet",
+    "severity": "CRITICAL"
+  },
+  {
+    "name": "Logging Enabled",
+    "description": "Device should send logs to a logging/syslog host",
+    "type": "contains",
+    "value": "logging host",
+    "severity": "MEDIUM"
+  },
+  {
+    "name": "NTP Configured",
+    "description": "Device should synchronize time with an NTP server",
+    "type": "contains",
+    "value": "ntp server",
+    "severity": "HIGH"
+  },
+  {
+    "name": "AAA Enabled",
+    "description": "AAA new-model must be enabled for centralized authentication",
+    "type": "contains",
+    "value": "aaa new-model",
+    "severity": "HIGH"
+  },
+  {
+    "name": "Banner Configured",
+    "description": "A login/MOTD banner should be configured",
+    "type": "contains",
+    "value": "banner motd",
+    "severity": "LOW"
+  },
+  {
+    "name": "SNMP Configured",
+    "description": "SNMP community/server should be configured for monitoring",
+    "type": "contains",
+    "value": "snmp-server",
+    "severity": "MEDIUM"
+  },
+  {
+    "name": "Interface Descriptions Present",
+    "description": "At least one interface must have a description configured",
+    "type": "regex",
+    "value": "(?m)^\\s*description\\s+\\S+",
+    "severity": "LOW"
+  },
+  {
+    "name": "All Interfaces Have IP Address",
+    "description": "At least one interface must have an IPv4 address assigned (not just 'no ip address')",
+    "type": "regex",
+    "value": "(?m)^\\s*ip address\\s+\\d{1,3}(\\.\\d{1,3}){3}\\s+\\d{1,3}(\\.\\d{1,3}){3}",
+    "severity": "MEDIUM"
+  }
+]
