@@ -1,362 +1,277 @@
-
 # Compliance Engine
 
-A rule-driven engine for checking Cisco IOS device configurations against
+This is my implementation of Task 2 — a Python compliance engine that takes a
+Cisco device config, checks it against a set of rules (SSH enabled, Telnet
+disabled, NTP configured, etc.), and spits out a PASS/FAIL report. Basically
+the thing every NCM (Network Configuration Management) tool does under the
+hood, just stripped down to the essentials.
 
-compliance policies (for example "SSH must be v2" "Telnet must be disabled"
-
-"NTP must be configured") and producing a JSON report.
+The idea driving the design: instead of manually eyeballing every router
+config against a checklist, you describe the checklist once as JSON rules,
+group them into a policy, and the engine does the boring part.
 
 ---
 
 ## 1. Design Overview
 
-The engine follows a linear pipeline:
+Following the workflow from the spec pretty closely:
 
 ```
-
-Load Config -> Load Policy -> Evaluate every rule -> Collect results -> Generate report
-
+Cisco Config File
+      │
+      ▼
+Device Object  (parsed config: name + raw text + lines)
+      │
+      ▼
+Compliance Engine
+      │
+      ├── loads Compliance Rules (from JSON)
+      └── loads Compliance Policy (a named group of rules)
+      │
+      ▼
+Rule Evaluation  (loop through every rule, run it, collect result)
+      │
+      ▼
+Compliance Report (JSON)
 ```
 
-**Core concepts**
+**The main classes:**
 
-| Concept | Class | Description |
+- `ComplianceRule` — one requirement. Has a `name`, `description`,
+  `rule_type`, `expected_value`, and `severity`. Rule type is an enum so it's
+  not just a random string floating around — `CONTAINS`, `NOT_CONTAINS`,
+  `STARTS_WITH`, `ENDS_WITH`, `REGEX`, `EQUALS`.
+- `CompliancePolicy` — just a `name` + list of `ComplianceRule` objects.
+  "Enterprise Router Policy" = SSH + NTP + Logging + AAA + SNMP bundled
+  together, so you evaluate a whole policy at once instead of rule by rule.
+- `Device` — wraps the loaded config (name + raw text + line list) so the
+  rest of the code isn't passing bare strings around.
+- `ComplianceResult` — the outcome of checking one rule: `rule_name`,
+  `status` (PASS/FAIL/ERROR), `severity`, and `evidence` (a short string
+  explaining *why* it passed or failed — makes the report actually useful
+  instead of just a yes/no).
+- `ComplianceEngine` — orchestrates the whole thing: load config, load
+  policy, loop through `policy.rules`, evaluate each one, collect results,
+  build the report.
 
-|---|---|---|
+**Why models/ and engine/ are separate folders:** `models/` only cares about
+what valid data looks like — a rule, a policy, a device. If something's
+malformed (missing a field, bad JSON, unsupported rule type) it should fail
+right there during loading with a clear exception, not silently cause weird
+behavior three steps later during evaluation. `engine/` only cares about
+*doing* something with that already-validated data — actually running the
+CONTAINS/REGEX/etc. checks and building the report. Splitting it this way
+also made unit testing way more straightforward, since I could test "is this
+rule JSON valid" completely separately from "does the contains-check
+actually work correctly."
 
-| Rule | `ComplianceRule` | One requirement, for example "SSH Enabled" (`contains: ip ssh version 2`) |
+**Rule types implemented** (matches the spec's list):
 
-| Policy | `CompliancePolicy` | A named group of rules for example "Enterprise Router Policy" |
+| Type | Meaning |
+|---|---|
+| `CONTAINS` | the value appears somewhere in the config |
+| `NOT_CONTAINS` | the value must NOT appear (e.g. Telnet transport line) |
+| `STARTS_WITH` | some config line starts with the value |
+| `ENDS_WITH` | some config line ends with the value |
+| `REGEX` | pattern matches anywhere in the config |
+| `EQUALS` | some config line matches the value exactly |
 
-Device | `Device` | A devices name plus raw configuration text |
-
-| Result | `ComplianceResult` | Outcome of evaluating one rule (`PASS` / `FAIL` / `ERROR`) with evidence |
-
-| Engine | `ComplianceEngine` | Orchestrates loading, evaluation and report generation |
-
-**Supported rule types**
-
-- `contains`. Passes if the value appears anywhere in the config
-
-- `not_contains`. Passes if the value does not appear (used for things like disabling Telnet)
-
-- `starts_with`. Passes if any config line starts with the value
-
-- `ends_with`. Passes if any config line ends with the value
-
-- `regex`. Passes if the pattern matches anywhere in the config (multiline)
-
-- `equals`. Passes if any config line exactly equals the value (after trimming)
-
-Rule types are defined once in `models/rule.py` (`RuleType` enum) and dispatched
-
-in `engine/evaluator.py` so adding a new rule type later means adding one enum
-
-value and one `elif` branch. Nothing else in the codebase needs to change.
-
-**Why the split between `models/` and `engine/`?**
-
-- `models/` only knows about data: what a valid rule/policy/device/result
-
-looks like and how to load/validate them from JSON. Each model raises a
-
-exception (`InvalidRuleError` `InvalidPolicyError` `ConfigLoadError`)
-
-when given bad input.
-
-- `engine/` only knows about behavior: how to evaluate a rule against text
-
-(`evaluator.py`) and how to run a policy against a device and build a
-
-report (`compliance_engine.py`).
-
-This separation makes it easy to unit test evaluation logic (`test_evaluator.py`)
-
-independently of file loading (`test_engine.py`) and independently of
-
-validation (`test_rule.py` `test_policy.py`).
+New rule types are cheap to add later — one more entry in the `RuleType`
+enum, one more branch in the evaluator, nothing else changes. That's the
+"strategy pattern, informally" bit — each rule type is really its own small
+strategy for deciding PASS/FAIL, they just live in one function instead of
+separate classes since there are only six of them right now.
 
 ---
 
 ## 2. Folder Structure
 
 ```
-
 compliance_engine/
-
 │
-
 ├── models/
-
-│   ├── device.py         # Device:. Config text/lines, from_file() loader
-
-│   ├── rule.py           # ComplianceRule, RuleType enum, InvalidRuleError
-
-│   ├── policy.py         # CompliancePolicy, InvalidPolicyError
-
-│   └── result.py         # ComplianceResult, RuleStatus enum (PASS/FAIL/ERROR)
-
+│   ├── device.py       # Device: name + config text/lines, from_file() loader
+│   ├── rule.py         # ComplianceRule + RuleType enum, validation
+│   ├── policy.py       # CompliancePolicy, validation
+│   └── result.py       # ComplianceResult + RuleStatus enum
 │
-
 ├── engine/
-
-│   ├── evaluator.py            # evaluate_rule(): the PASS/FAIL logic per rule type
-
-│   └── compliance_engine.py    # ComplianceEngine: load -> run -> generate_report -> save_report
-
+│   ├── evaluator.py            # evaluate_rule() — the actual PASS/FAIL logic
+│   └── compliance_engine.py    # ComplianceEngine: load -> run -> report
 │
-
 ├── rules/
-
-│   ├── security_rules.json             # Full library of 10 individual rules
-
-│   └── enterprise_router_policy.json   # A policy grouping 6 of those rules
-
+│   ├── security_rules.json             # all 10 rules from the spec (hostname, SSH,
+│   │                                    #   telnet, logging, NTP, AAA, banner, SNMP,
+│   │                                    #   interface descriptions, interface IPs)
+│   └── enterprise_router_policy.json   # a policy grouping SSH/Telnet/NTP/Logging/AAA/SNMP
 │
-
 ├── sample_configs/
-
-│   ├── HQ-Router1.cfg    # Fully compliant sample config (all rules PASS)
-
-│   └── Branch-R1.cfg     # Non-compliant sample config (several rules FAIL)
-
+│   ├── HQ-Router1.cfg   # clean config — should pass everything
+│   └── Branch-R1.cfg    # config with Telnet on, no NTP/AAA/SNMP — fails several rules
 │
-
-├── reports/              # Generated JSON reports land here
-
+├── reports/             # generated JSON reports land here
 │
-
 ├── tests/
-
-│   ├── test_rule.py       # Rule loading/validation
-
-│   ├── test_policy.py     # Policy loading/validation
-
-│   ├── test_evaluator.py  # contains / not_contains / regex / etc. Evaluation
-
-│   └── test_engine.py     # End-to-end engine + report generation + error handling
-
+│   ├── test_rule.py       # rule loading / validation
+│   ├── test_policy.py     # policy loading / validation
+│   ├── test_evaluator.py  # CONTAINS / NOT_CONTAINS / REGEX / etc.
+│   └── test_engine.py     # end-to-end run + report generation + error handling
 │
-
-├── main.py                # CLI entry point
-
+├── main.py               # CLI entry point
 └── README.md
-
 ```
 
 ---
 
 ## 3. How to Run
 
-No third-party dependencies are required. The engine only uses the Python
+Pure standard library — no pip installs needed (`json`, `re`, `logging`,
+`argparse`, `dataclasses`, `enum`). Should run on Python 3.8+.
 
-library (`json` `re` `logging` `argparse` `dataclasses`).
-
-**Run against the -compliant sample device:**
+**Check a non-compliant device:**
 
 ```bash
-
 python3 main.py \
-
---config sample_configs/Branch-R1.cfg \
-
---policy rules/enterprise_router_policy.json \
-
---output reports/branch_r1_report.json
-
+  --config sample_configs/Branch-R1.cfg \
+  --policy rules/enterprise_router_policy.json \
+  --output reports/branch_r1_report.json
 ```
 
-**Run against the compliant sample device:**
+**Check a compliant one:**
 
 ```bash
-
 python3 main.py \
-
---config sample_configs/HQ-Router1.cfg \
-
---policy rules/enterprise_router_policy.json \
-
---output reports/hq_router1_report.json
-
+  --config sample_configs/HQ-Router1.cfg \
+  --policy rules/enterprise_router_policy.json \
+  --output reports/hq_router1_report.json
 ```
 
-**Options:**
+**Flags:**
 
-- `--config` (required). Path to the device configuration file
+- `--config` (required) — path to the device config file
+- `--policy` (required) — path to the policy JSON
+- `--device-name` (optional) — override the device name, defaults to the filename
+- `--output` (optional) — where to save the JSON report (it prints to stdout regardless)
+- `--verbose` — turns on DEBUG-level logging if you want to see everything
 
-- `--policy` (required). Path to the compliance policy JSON file
+Exit codes are meaningful, so this drops cleanly into a CI pipeline:
+`0` = compliant, `2` = not compliant, `1` = something wrong with the inputs
+(bad file, corrupted JSON, etc).
 
-- `--device-name` (optional). Override the device name (defaults to filename)
-
-- `--output` (optional). Write the JSON report to this path (also always printed to stdout)
-
-- `--verbose`. Enable DEBUG-level logging
-
-**Exit codes** (useful for CI/CD pipelines): `0` = PASS, `2` = overall
-
-FAIL `1` = a loading error occurred (bad file, corrupted JSON, etc.)
-
-**Run the unit tests:**
+**Run the tests:**
 
 ```bash
-
 python3 -m unittest discover -s tests -v
-
 ```
 
 ---
 
 ## 4. Sample Input / Output
 
-**Input. `Sample_configs/Branch-R1.cfg` (excerpt):**
+**Input config** (`sample_configs/Branch-R1.cfg`, trimmed):
 
 ```
-
 hostname Branch-R1
-
 ip ssh version 2
-
 service timestamps
-
 logging host 10.1.1.1
-
 line vty 0 4
-
-transport input telnet ssh
-
+ transport input telnet ssh
 ```
 
-**Output. `Reports/branch_r1_report.json` (excerpt):**
+**Rule evaluation, matching the spec's example directly:**
+
+| Rule | Type | Value | Result |
+|---|---|---|---|
+| SSH Enabled | CONTAINS | `ip ssh version 2` | **PASS** — found in config |
+| NTP Configured | CONTAINS | `ntp server` | **FAIL** — not found |
+| Telnet Disabled | NOT_CONTAINS | `transport input telnet` | **FAIL** — telnet is there |
+
+**Resulting report** (`reports/branch_r1_report.json`):
 
 ```json
-
 {
-
-"device": "Branch-R1"
-
-"policy": "Enterprise Router Policy"
-
-"overall_status": "
-
-"summary": {
-
-"total": 6
-
-"pass": 2
-
-"fail": 4
-
-"error": 0
-
+  "device": "Branch-R1",
+  "policy": "Enterprise Router Policy",
+  "overall_status": "FAIL",
+  "summary": {
+    "pass": 2,
+    "fail": 4,
+    "error": 0
+  },
+  "results": [
+    {
+      "rule": "SSH Enabled",
+      "status": "PASS",
+      "severity": "HIGH",
+      "evidence": "Found 'ip ssh version 2' in configuration."
+    },
+    {
+      "rule": "NTP Configured",
+      "status": "FAIL",
+      "severity": "HIGH",
+      "evidence": "'ntp server' not found in configuration."
+    },
+    {
+      "rule": "Telnet Disabled",
+      "status": "FAIL",
+      "severity": "CRITICAL",
+      "evidence": "Found forbidden value 'transport input telnet' in configuration."
+    }
+  ]
 }
-
-"results": [
-
-{
-
-"rule": "SSH Enabled"
-
-"status": "PASS"
-
-"severity": "
-
-"evidence": "Found 'ip ssh version 2' in configuration."
-
-}
-
-{
-
-"rule": "Telnet Disabled"
-
-"status": "FAIL"
-
-"severity": "CRITICAL"
-
-"evidence": "Found forbidden value 'transport input telnet' in configuration."
-
-}
-
-{
-
-"rule": "NTP Configured"
-
-"status": "FAIL"
-
-"severity": "
-
-"evidence": "'ntp server' not found in configuration."
-
-}
-
-]
-
-}
-
 ```
 
-**Log excerpt (stderr, via `logging`):**
+**Logging output** (stderr, via Python's `logging` module — matches the
+INFO/WARNING/ERROR examples from the spec):
 
 ```
-
-2026-07-25 05:10:58 INFO     compliance_engine.evaluator: Evaluating rule 'AAA Enabled' (contains)
-
-2026-07-25 05:10:58 WARNING  compliance_engine.evaluator: Rule 'AAA Enabled' FAILED: 'aaa model' not found in configuration.
-
+2026-07-25 05:10:58 INFO     compliance_engine: Loaded configuration for device 'Branch-R1'
+2026-07-25 05:10:58 INFO     compliance_engine: Loaded policy 'Enterprise Router Policy' with 6 rule(s)
+2026-07-25 05:10:58 INFO     compliance_engine.evaluator: Evaluating rule 'SSH Enabled'
+2026-07-25 05:10:58 WARNING  compliance_engine.evaluator: Rule 'NTP Configured' FAILED: 'ntp server' not found in configuration.
 2026-07-25 05:10:58 INFO     compliance_engine: Compliance run complete for device 'Branch-R1'.
-
 ```
 
----
+**Exception handling** — covers everything the spec calls out:
 
-## 5. Exception Handling
-
-| Scenario | Where its caught | Exception raised |
-
-|---|---|---|
-
-Missing config file | `Device.from_file` | `ConfigLoadError` |
-
-| Empty config file | `Device.from_file` | `ConfigLoadError` |
-
-| Missing policy file | `ComplianceEngine.load_policy_from_file` | `PolicyLoadError` |
-
-| Empty policy file | `ComplianceEngine.load_policy_from_file` | `PolicyLoadError` |
-
-| Corrupted/invalid JSON | `ComplianceEngine.load_policy_from_file` | `PolicyLoadError` (wraps `json.JSONDecodeError`) |
-
-Empty policy (no rules) | `CompliancePolicy.from_dict` | `InvalidPolicyError` |
-
-| Invalid rule format (missing name/type/value) | `ComplianceRule.from_dict` | `InvalidRuleError` |
-
-| Unsupported rule type | `ComplianceRule.from_dict` | `InvalidRuleError` |
-
-| Bad regex pattern at evaluation time | `evaluator.evaluate_rule` | Caught internally -> `ComplianceResult` with status `ERROR` (does not crash the run) |
-
-`main.py` catches all loading-time exceptions and prints a ERROR:...`
-
-message with a non-zero exit code instead of a raw traceback.
+- Missing config file → clean error, no traceback dumped on the user
+- Empty config file → same
+- Corrupted/invalid policy JSON → caught and reported clearly
+- Empty policy (zero rules) → rejected at load time
+- Invalid rule format (missing name/type/value) → rejected at load time
+- Unsupported rule type → rejected at load time
+- A broken regex pattern in a rule → doesn't crash the whole run, that one
+  rule just comes back as `ERROR` status with the reason in the evidence
+  field, and everything else still evaluates normally
 
 ---
 
-## 6. Future Enhancements
+## 5. Future Enhancements
 
-- **Additional output formats**. HTML (styled report) Excel/CSV export for
-
-audit teams since `generate_report()` already returns a dict/JSON
-
-structure thats trivial to feed into other renderers.
-
-- **More rule types**. `Range` (for example thresholds, like ACL count)
-
-all_of / any_of composite rules, absent_line_count.
-
-- **Multi-device / bulk scanning**. Direct the engine to a folder of configs. Generate one combined report with breakdowns for each device.
-
-- **Vendor abstraction**. Currently set up for Cisco IOS syntax; a platform field on rules or policies could let the engine check Juniper, Arista or Fortinet configs.
-
-- **Policy inheritance**. Let policies build on or replace a "base" policy (for example "Enterprise Router Policy" builds on "Global Baseline Policy").
-
-- **Remediation hints**. Add a suggested CLI command to each rule so a failed report can also act as a to-do list for network engineers.
-
-- **REST API wrapper**. Make ComplianceEngine available, through a FastAPI/Flask service so configs can be uploaded and checked without running main.py.
+- **HTML/CSV/Excel report output** — the spec mentions this as a later step,
+  and it's an easy add since `generate_report()` already just returns a
+  plain dict — any of those formats is just a different renderer on top of
+  the same data.
+- **More rule types** — numeric range checks (e.g. "ACL entry count under
+  X"), or composite rules like "any_of" / "all_of" for cases where more than
+  one config line could satisfy the same requirement.
+- **SNMP "not public" style checks** — right now SNMP is checked with a
+  simple CONTAINS on `snmp-server`, but the real-world example in the spec
+  calls out checking that the community string *isn't* the default
+  `"public"`. That's a good candidate for a small `NOT_CONTAINS` rule
+  (`snmp-server community public`) once default-credential checks become a
+  priority.
+- **Scan a whole folder of configs at once** instead of one device per run,
+  with a single combined report across all of them.
+- **Abstract base class for rule strategies** — right now all six rule types
+  live as branches inside one evaluator function, which is fine at this
+  scale. If the list of rule types keeps growing, splitting each into its
+  own strategy class (proper Strategy Pattern) would keep the evaluator from
+  turning into a giant if/elif chain.
+- **Policy inheritance** — let a policy extend a shared baseline instead of
+  re-listing every rule every time.
+- **Remediation hints** — attach a suggested config snippet to each rule so
+  a FAIL result doubles as a fix suggestion, not just a diagnosis.
+- **Small REST API wrapper** (FastAPI/Flask) so configs can be uploaded and
+  checked without needing the CLI.
